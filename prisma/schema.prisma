@@ -1,0 +1,154 @@
+// FitLogger data model.
+// See ../docs/PRD.md and ../docs/TECHNICAL_PLAN.md (§2) for the design rationale.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Unit {
+  KG
+  LB
+}
+
+enum SetType {
+  WARMUP
+  WORKING
+}
+
+enum PRType {
+  MAX_WEIGHT
+  MAX_REPS
+  BEST_E1RM
+  SESSION_VOLUME
+}
+
+// Mirrors a Supabase auth.users row (id matches auth.uid()); this table holds
+// app-level profile data only. See TECHNICAL_PLAN.md §3 for the RLS pattern.
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  displayName    String
+  unitPreference Unit     @default(KG)
+  createdAt      DateTime @default(now())
+
+  exercises         Exercise[]
+  routines          Routine[]
+  workoutSessions   WorkoutSession[]
+  personalRecords   PersonalRecord[]
+  bodyweightEntries BodyweightEntry[]
+}
+
+model Exercise {
+  id          String   @id @default(uuid())
+  name        String
+  muscleGroup String
+  isCustom    Boolean  @default(false)
+  ownerId     String?
+  owner       User?    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  routineExercises RoutineExercise[]
+  workoutExercises WorkoutExercise[]
+  personalRecords  PersonalRecord[]
+
+  // Prevents duplicate custom exercise names per user; multiple library rows
+  // (ownerId null) can't collide here since NULL is never treated as equal to NULL.
+  @@unique([ownerId, name])
+}
+
+model Routine {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+
+  exercises       RoutineExercise[]
+  workoutSessions WorkoutSession[]
+}
+
+model RoutineExercise {
+  id         String   @id @default(uuid())
+  routineId  String
+  routine    Routine  @relation(fields: [routineId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  targetSets Int?
+  targetReps Int?
+  order      Int
+}
+
+model WorkoutSession {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  routineId  String?
+  routine    Routine?  @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  exercises WorkoutExercise[]
+}
+
+model WorkoutExercise {
+  id         String         @id @default(uuid())
+  sessionId  String
+  session    WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   Exercise       @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  note       String?
+  order      Int
+
+  sets SetEntry[]
+}
+
+model SetEntry {
+  id                String          @id @default(uuid())
+  workoutExerciseId String
+  workoutExercise   WorkoutExercise @relation(fields: [workoutExerciseId], references: [id], onDelete: Cascade)
+  // Canonical storage unit is kg regardless of the logging user's display
+  // preference — see TECHNICAL_PLAN.md §5 ("Units"). Never store lb directly.
+  weightKg          Decimal         @db.Decimal(6, 2)
+  reps              Int
+  setType           SetType         @default(WORKING)
+  rpe               Decimal?        @db.Decimal(3, 1)
+  order             Int
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+// One row per (user, exercise, recordType) — recomputed from scratch on every
+// SetEntry mutation, so edits/deletes correctly demote a record rather than
+// leaving a stale "is this the max" flag. See TECHNICAL_PLAN.md §4.
+model PersonalRecord {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  recordType PRType
+  valueKg    Decimal? @db.Decimal(6, 2)
+  reps       Int?
+  volumeKg   Decimal? @db.Decimal(8, 2)
+  setEntryId String?
+  achievedAt DateTime
+
+  @@unique([userId, exerciseId, recordType])
+}
+
+model BodyweightEntry {
+  id       String   @id @default(uuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weightKg Decimal  @db.Decimal(5, 2)
+  loggedAt DateTime @default(now())
+}
+
+// Phase 2 (not yet migrated — see docs/PRD.md "Phase 2"):
+//   model Follow { followerId, followeeId, status }
+//   model KudosReaction { workoutSessionId, userId }
