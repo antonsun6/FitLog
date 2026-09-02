@@ -40,10 +40,16 @@ pnpm exec prisma db seed    # run prisma/seed.ts (library exercise catalog)
 ## Status
 
 Scaffolding complete: Next.js + Tailwind + Prisma schema (all MVP models) +
-RLS design (documented, not yet applied to a live DB) + route skeleton (all
-pages are placeholders) + `lib/db.ts`, `lib/units.ts` implemented,
-`lib/pr.ts` stubbed. No Supabase project connected yet (`.env` needs real
-credentials before auth/data actually works).
+route skeleton (all pages are placeholders) + `lib/db.ts`, `lib/units.ts`
+implemented, `lib/pr.ts` stubbed. Supabase project is connected — `.env` has
+real credentials, the initial migration (`prisma/migrations/..._init`) is
+applied, and the seed script has run successfully. RLS policies are still
+just designed on paper (`docs/TECHNICAL_PLAN.md` §3), not yet written —
+**and note the Prisma connection (`DATABASE_URL`/`DIRECT_URL`) uses
+Supabase's `postgres` role, which has `BYPASSRLS`, so RLS won't actually
+protect app queries even once policies exist. Every server action must do
+its own `where: { userId: ... }` filtering — RLS here is defense-in-depth
+for the Data API only (currently disabled), not the primary boundary.**
 
 Remaining build order (`docs/TECHNICAL_PLAN.md` §8): auth → exercise
 library UI → workout logging UI → PR detection implementation → edit/delete

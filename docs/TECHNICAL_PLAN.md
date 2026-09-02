@@ -149,6 +149,27 @@ Notes:
 
 ## 3. Row Level Security (Supabase)
 
+**Important correction (found during setup, not caught at design time):** the
+app connects to Postgres directly via Prisma using Supabase's `postgres`
+role (`DATABASE_URL`/`DIRECT_URL`), which has `BYPASSRLS` — Supabase grants
+it that so migrations/admin work. That means **RLS policies do not protect
+this app's own queries.** They only apply to traffic through Supabase's Data
+API or `supabase-js` using the `anon`/`authenticated` roles — and the Data
+API is deliberately disabled for this project (see below). So the policies
+below are still worth writing as defense-in-depth (in case the Data API is
+ever turned on, or another client connects as `authenticated`), but the
+**actual security boundary is application-level**: every server action must
+filter its Prisma queries by the authenticated user's id
+(`where: { userId: session.user.id }`, or the equivalent join-based filter
+for tables like `SetEntry`). Don't treat "the RLS policy exists" as
+sufficient — the query itself has to be scoped.
+
+Data API: **disabled** for this project (Project Settings → Data API →
+"Enable Data API" off), along with "Automatically expose new tables" (off).
+"Enable automatic RLS" is **on** so any table Prisma's migrations create
+gets RLS turned on by default — fails closed if a policy is ever forgotten,
+even though (per above) it isn't the primary defense for this app's traffic.
+
 Every user-owned table gets the same pattern. Example for `SetEntry` (via its `workoutExercise → session → userId` chain — RLS on a non-direct-owner table needs a join, not just `auth.uid() = user_id`):
 
 ```sql
