@@ -14,7 +14,10 @@ just the fast-context summary.
 
 Next.js (App Router) + TypeScript + Tailwind · Prisma 7 (driver-adapter mode,
 `@prisma/adapter-pg`) · Supabase (Postgres + Auth + RLS) · Vercel · Recharts ·
-pnpm.
+pnpm · **Node 22+ required** (`.nvmrc`/`engines` pin this — Node 20 hit EOL
+in April 2026 and lacks runtime features like `Map.groupBy` that this
+codebase now uses; run `nvm use` in the project directory if your shell
+defaults elsewhere).
 
 ## Commands
 
@@ -58,10 +61,24 @@ explicitly, not via the schema's default); sign-in/sign-out work;
 request and redirect signed-out users off protected app routes /
 signed-in users off the auth routes; `app/(app)/dashboard/page.tsx` reads
 the real signed-in user's Prisma row as the proof this all connects
-end-to-end. Every other app page is still a static placeholder.
+end-to-end.
 
-Remaining build order (`docs/TECHNICAL_PLAN.md` §8): exercise library UI →
-workout logging UI → PR detection implementation → edit/delete UI →
-routines UI → bodyweight UI → account deletion + RLS verification → PWA
-polish. Update this section as steps land so a fresh session can see
-what's actually done vs. still planned.
+**Exercise library UI is complete** (`docs/TECHNICAL_PLAN.md` §8 step 3):
+`app/(app)/exercises/page.tsx` lists library exercises (`ownerId: null`)
+plus the signed-in user's own custom ones, grouped by muscle group; the
+"add custom exercise" form (`app/(app)/exercises/actions.ts`) creates one
+scoped to `ownerId: user.id`, with a case-insensitive duplicate-name check
+(the DB's `@@unique([ownerId, name])` alone is case-sensitive) backed by a
+P2002 catch as a fallback. `app/(app)/exercises/[exerciseId]/page.tsx`
+(per-exercise history) is still a stub — it depends on workout logging
+existing, which is the next step. Nav links between app pages were added
+to `app/(app)/layout.tsx` alongside sign-out.
+
+Every other app page (`workout/*`, `routines/*`, `bodyweight`, `settings`)
+is still a static placeholder.
+
+Remaining build order (`docs/TECHNICAL_PLAN.md` §8): workout logging UI →
+PR detection implementation → edit/delete UI → routines UI → bodyweight UI
+→ account deletion + RLS verification → PWA polish. Update this section as
+steps land so a fresh session can see what's actually done vs. still
+planned.
