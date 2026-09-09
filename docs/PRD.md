@@ -74,6 +74,7 @@ These are ruled out "for now" per the user — not permanently forbidden, but no
 - Native mobile app (once the PWA validates the core product)
 - Offline-first logging with background sync (not critical for v1 — "nice to have")
 - Wearable integrations, AI coaching/program generation, paid coaching marketplace — explicitly ruled out for now; revisit only if there's clear demand
+- **Optional "save to library" toggle when adding a new exercise mid-workout** — v1 always saves it permanently (matches the Exercises page's existing behavior); a future version could let the user decide per-exercise whether it becomes a permanent library entry or stays a one-off for that session. Would need an `Exercise.savedToLibrary` field and a lookup-or-create flow instead of always-create.
 
 ## User Stories
 
