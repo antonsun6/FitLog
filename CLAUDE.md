@@ -40,19 +40,28 @@ pnpm exec prisma db seed    # run prisma/seed.ts (library exercise catalog)
 ## Status
 
 Scaffolding complete: Next.js + Tailwind + Prisma schema (all MVP models) +
-route skeleton (all pages are placeholders) + `lib/db.ts`, `lib/units.ts`
-implemented, `lib/pr.ts` stubbed. Supabase project is connected — `.env` has
-real credentials, the initial migration (`prisma/migrations/..._init`) is
-applied, and the seed script has run successfully. RLS policies are still
-just designed on paper (`docs/TECHNICAL_PLAN.md` §3), not yet written —
-**and note the Prisma connection (`DATABASE_URL`/`DIRECT_URL`) uses
-Supabase's `postgres` role, which has `BYPASSRLS`, so RLS won't actually
-protect app queries even once policies exist. Every server action must do
-its own `where: { userId: ... }` filtering — RLS here is defense-in-depth
-for the Data API only (currently disabled), not the primary boundary.**
+`lib/db.ts`, `lib/units.ts` implemented, `lib/pr.ts` stubbed. Supabase
+project is connected — `.env` has real credentials, the initial migration
+(`prisma/migrations/..._init`) is applied, and the seed script has run
+successfully. RLS policies are still just designed on paper
+(`docs/TECHNICAL_PLAN.md` §3), not yet written — **and note the Prisma
+connection (`DATABASE_URL`/`DIRECT_URL`) uses Supabase's `postgres` role,
+which has `BYPASSRLS`, so RLS won't actually protect app queries even once
+policies exist. Every server action must do its own
+`where: { userId: ... }` filtering — RLS here is defense-in-depth for the
+Data API only (currently disabled), not the primary boundary.**
 
-Remaining build order (`docs/TECHNICAL_PLAN.md` §8): auth → exercise
-library UI → workout logging UI → PR detection implementation → edit/delete
-UI → routines UI → bodyweight UI → account deletion + RLS verification →
-PWA polish. Update this section as steps land so a fresh session can see
+**Auth is complete** (`docs/TECHNICAL_PLAN.md` §8 step 2): sign-up creates
+both a Supabase auth user and a matching Prisma `User` row (id kept in sync
+explicitly, not via the schema's default); sign-in/sign-out work;
+`proxy.ts` + `lib/supabase/middleware.ts` refresh the session on every
+request and redirect signed-out users off protected app routes /
+signed-in users off the auth routes; `app/(app)/dashboard/page.tsx` reads
+the real signed-in user's Prisma row as the proof this all connects
+end-to-end. Every other app page is still a static placeholder.
+
+Remaining build order (`docs/TECHNICAL_PLAN.md` §8): exercise library UI →
+workout logging UI → PR detection implementation → edit/delete UI →
+routines UI → bodyweight UI → account deletion + RLS verification → PWA
+polish. Update this section as steps land so a fresh session can see
 what's actually done vs. still planned.
