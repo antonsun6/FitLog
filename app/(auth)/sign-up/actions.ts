@@ -1,0 +1,64 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import { prisma } from "@/lib/db";
+import { createClient } from "@/lib/supabase/server";
+import { Unit } from "@/generated/prisma/client";
+
+function fail(message: string): never {
+  redirect(`/sign-up?error=${encodeURIComponent(message)}`);
+}
+
+export async function signUp(formData: FormData) {
+  const email = formData.get("email");
+  const password = formData.get("password");
+  const confirmPassword = formData.get("confirmPassword");
+  const displayName = formData.get("displayName");
+
+  if (
+    typeof email !== "string" ||
+    typeof password !== "string" ||
+    typeof confirmPassword !== "string" ||
+    typeof displayName !== "string" ||
+    !email ||
+    !password ||
+    !confirmPassword ||
+    !displayName
+  ) {
+    fail("All fields are required.");
+  }
+
+  // Client-side minLength doesn't guarantee a match, or that the request
+  // even came from the real form — validate server-side too.
+  if (password !== confirmPassword) {
+    fail("Passwords do not match.");
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.signUp({ email, password });
+
+  if (error || !data.user) {
+    fail(error?.message ?? "Sign up failed.");
+  }
+
+  // The profile row's id must match auth.users.id exactly — the schema's
+  // @default(uuid()) only kicks in when no id is passed. See
+  // docs/TECHNICAL_PLAN.md §2 and §8 step 2.
+  try {
+    await prisma.user.create({
+      data: {
+        id: data.user.id,
+        email,
+        displayName,
+        unitPreference: Unit.KG,
+      },
+    });
+  } catch (dbError) {
+    console.error("Failed to create User profile after sign-up:", dbError);
+    fail(
+      "Account created but profile setup failed — contact support rather than retrying sign-up with the same email.",
+    );
+  }
+
+  redirect("/dashboard");
+}
