@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { createClient } from "@/lib/supabase/server";
 
@@ -14,10 +15,9 @@ export default async function DashboardPage() {
     ? await prisma.user.findUnique({ where: { id: authUser.id } })
     : null;
 
-  // TODO: workout history list + "Start Workout" CTA.
-  // See docs/PRD.md "Key User Workflows" #1-2.
+  // TODO: workout history list. See docs/PRD.md "Key User Workflows" #1.
   return (
-    <main className="flex flex-1 flex-col gap-2 p-8">
+    <main className="flex flex-1 flex-col gap-4 p-8">
       <h1 className="text-2xl font-semibold">
         {profile ? `Welcome, ${profile.displayName}. It's time to get active!` : "Dashboard"}
       </h1>
@@ -27,6 +27,15 @@ export default async function DashboardPage() {
           this shouldn&apos;t happen for accounts created via /sign-up.
         </p>
       )}
+      <Link
+        href="/workout/new"
+        className="inline-block w-fit rounded bg-black px-4 py-2 text-sm text-white"
+      >
+        Start Workout
+      </Link>
+      <p className="text-sm text-gray-500">
+        Workout history will show up here once it&apos;s built.
+      </p>
     </main>
   );
 }
