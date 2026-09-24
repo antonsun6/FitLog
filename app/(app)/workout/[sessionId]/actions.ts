@@ -1,7 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { SetType } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
+import { lbToKg } from "@/lib/units";
 import { createClient } from "@/lib/supabase/server";
 
 function fail(sessionId: string, message: string): never {
@@ -71,4 +73,143 @@ export async function addExerciseToSession(formData: FormData) {
   });
 
   redirect(`/workout/${sessionId}`);
+}
+
+export async function logSet(formData: FormData) {
+  const sessionId = formData.get("sessionId");
+  const workoutExerciseId = formData.get("workoutExerciseId");
+  const weightRaw = formData.get("weight");
+  const repsRaw = formData.get("reps");
+  const setTypeRaw = formData.get("setType");
+  const rpeRaw = formData.get("rpe");
+
+  if (typeof sessionId !== "string" || !sessionId) {
+    redirect("/dashboard");
+  }
+
+  if (
+    typeof workoutExerciseId !== "string" ||
+    !workoutExerciseId ||
+    typeof weightRaw !== "string" ||
+    !weightRaw ||
+    typeof repsRaw !== "string" ||
+    !repsRaw
+  ) {
+    fail(sessionId, "Weight and reps are required.");
+  }
+
+  const weight = Number(weightRaw);
+  const reps = Number(repsRaw);
+  if (!Number.isFinite(weight) || weight <= 0) {
+    fail(sessionId, "Enter a valid weight greater than 0.");
+  }
+  if (!Number.isInteger(reps) || reps <= 0) {
+    fail(sessionId, "Reps must be a whole number greater than 0.");
+  }
+
+  let rpe: number | null = null;
+  if (typeof rpeRaw === "string" && rpeRaw) {
+    rpe = Number(rpeRaw);
+    if (!Number.isFinite(rpe) || rpe < 1 || rpe > 10) {
+      fail(sessionId, "RPE must be a number between 1 and 10.");
+    }
+  }
+
+  const setType = setTypeRaw === "WARMUP" ? SetType.WARMUP : SetType.WORKING;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/sign-in");
+  }
+
+  // WorkoutExercise has no direct userId — ownership has to be checked
+  // through the session relation, same reasoning as everywhere else in
+  // this file: Prisma bypasses RLS, so this join is the actual boundary.
+  const workoutExercise = await prisma.workoutExercise.findFirst({
+    where: { id: workoutExerciseId, session: { userId: user.id } },
+    select: { id: true, sessionId: true },
+  });
+  if (!workoutExercise) {
+    fail(sessionId, "That exercise could not be found in this session.");
+  }
+
+  // Convert to canonical kg per the user's stored preference — see
+  // lib/units.ts and docs/PRD.md "Units & Data Integrity". Never store the
+  // display unit directly.
+  const profile = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { unitPreference: true },
+  });
+  const weightKg = profile?.unitPreference === "LB" ? lbToKg(weight) : weight;
+
+  const order = await prisma.setEntry.count({ where: { workoutExerciseId } });
+
+  await prisma.setEntry.create({
+    data: { workoutExerciseId, weightKg, reps, setType, rpe, order },
+  });
+
+  redirect(`/workout/${workoutExercise.sessionId}`);
+}
+
+export async function saveExerciseNote(formData: FormData) {
+  const sessionId = formData.get("sessionId");
+  const workoutExerciseId = formData.get("workoutExerciseId");
+  const noteRaw = formData.get("note");
+
+  if (typeof sessionId !== "string" || !sessionId) {
+    redirect("/dashboard");
+  }
+  if (typeof workoutExerciseId !== "string" || !workoutExerciseId) {
+    fail(sessionId, "Could not identify which exercise to note.");
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/sign-in");
+  }
+
+  const note =
+    typeof noteRaw === "string" && noteRaw.trim() ? noteRaw.trim() : null;
+
+  // updateMany lets the ownership check (via the session relation) and the
+  // write be one atomic query — a non-owner's id simply matches 0 rows.
+  const { count } = await prisma.workoutExercise.updateMany({
+    where: { id: workoutExerciseId, session: { userId: user.id } },
+    data: { note },
+  });
+  if (count === 0) {
+    fail(sessionId, "That exercise could not be found in this session.");
+  }
+
+  redirect(`/workout/${sessionId}`);
+}
+
+export async function finishWorkoutSession(formData: FormData) {
+  const sessionId = formData.get("sessionId");
+
+  if (typeof sessionId !== "string" || !sessionId) {
+    redirect("/dashboard");
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/sign-in");
+  }
+
+  // Only marks an as-yet-unfinished session belonging to this user.
+  await prisma.workoutSession.updateMany({
+    where: { id: sessionId, userId: user.id, finishedAt: null },
+    data: { finishedAt: new Date() },
+  });
+
+  redirect("/dashboard");
 }
