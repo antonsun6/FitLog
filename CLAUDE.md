@@ -39,6 +39,7 @@ pnpm exec prisma db seed    # run prisma/seed.ts (library exercise catalog)
 - **Two DB connection strings, different jobs.** `DATABASE_URL` (pooled/pgbouncer, port 6543) is what the app uses at runtime via `lib/db.ts`. `DIRECT_URL` (unpooled, port 5432) is what `prisma7.config.ts` uses for migrations/introspection — Prisma 7 dropped schema-level `directUrl`, so this split is enforced by which var each file reads, not by Prisma itself.
 - **Account deletion needs two systems, not one.** Every Prisma-modeled table cascades from `User` via `ON DELETE CASCADE`, but the Supabase `auth.users` row is separate and needs the Supabase Admin API (`SUPABASE_SERVICE_ROLE_KEY`, server-only) to remove — a Prisma-only delete leaves an orphaned auth account.
 - **Social (follow/feed/kudos) is deliberately phase 2**, deferred to keep v1 scope tight. Don't add social tables or UI without checking `docs/PRD.md` first — the schema is designed to add it later without reworking core tables.
+- **A schema change needs an actual dev-server restart, not just a hot reload.** `pnpm exec prisma migrate dev` regenerates the Prisma Client on disk, but a long-running `next dev` process won't pick up the new client without restarting. Worse: `pkill -f "next dev"` only reliably kills the launcher process, not the `next-server` worker it spawns — check `lsof -i :3000` / `ps aux | grep next-server` and kill that PID directly if a restart doesn't seem to take effect (symptom: `PrismaClientValidationError: Unknown argument` for a field that's definitely in the schema).
 
 ## Status
 
@@ -74,11 +75,26 @@ P2002 catch as a fallback. `app/(app)/exercises/[exerciseId]/page.tsx`
 existing, which is the next step. Nav links between app pages were added
 to `app/(app)/layout.tsx` alongside sign-out.
 
-Every other app page (`workout/*`, `routines/*`, `bodyweight`, `settings`)
-is still a static placeholder.
+**Core workout logging is complete** (`docs/TECHNICAL_PLAN.md` §8 step 4):
+`app/(app)/workout/new/page.tsx` starts a `WorkoutSession` (optional custom
+name, defaults to "Lifting Session" — `WorkoutSession.name`); the session
+page (`app/(app)/workout/[sessionId]/`) adds exercises (reusing the
+library-or-create-custom lookup from the Exercises page), logs `SetEntry`
+rows (weight converted to canonical kg via `lib/units.ts`, optional
+warm-up/working tag and RPE), and saves a free-text note per exercise
+(`WorkoutExercise.note`). Finishing a session sets `finishedAt` and
+switches the page to a read-only view (no edit forms). The dashboard shows
+real history (name, date, exercise count, status) with inline rename.
+**No PR detection is wired in yet** — `lib/pr.ts` is still the stub from
+scaffolding; that's the next step. Every `WorkoutSession`/`WorkoutExercise`
+query in these actions is explicitly scoped to the authenticated user
+(directly or via the `session` relation) — same reasoning as the RLS note
+above.
 
-Remaining build order (`docs/TECHNICAL_PLAN.md` §8): workout logging UI →
-PR detection implementation → edit/delete UI → routines UI → bodyweight UI
-→ account deletion + RLS verification → PWA polish. Update this section as
-steps land so a fresh session can see what's actually done vs. still
-planned.
+Every other app page (`exercises/[exerciseId]` history, `routines/*`,
+`bodyweight`, `settings`) is still a static placeholder.
+
+Remaining build order (`docs/TECHNICAL_PLAN.md` §8): PR detection
+implementation → edit/delete UI → routines UI → bodyweight UI → account
+deletion + RLS verification → PWA polish. Update this section as steps
+land so a fresh session can see what's actually done vs. still planned.
