@@ -34,7 +34,8 @@ pnpm exec prisma db seed    # run prisma/seed.ts (library exercise catalog)
 ## Conventions worth remembering
 
 - **Weight is always stored in kg** (`SetEntry.weightKg`, `BodyweightEntry.weightKg`). A user's kg/lb preference is a display/input formatting concern only — convert in `lib/units.ts`, never store lb, never let a display rounding feed back into a write. See `docs/PRD.md` → "Units & Data Integrity".
-- **PR recalculation is a full recompute, not an incremental update.** `lib/pr.ts` (stub) must, on every `SetEntry` create/update/delete, recompute all four `PRType` aggregates for that (user, exercise) from the complete current history — this is what makes edits/deletes correctly demote a record instead of leaving it stale. See `docs/TECHNICAL_PLAN.md` §4.
+- **PR recalculation is a full recompute, not an incremental update.** `lib/pr.ts`'s `recalculatePersonalRecords(userId, exerciseId)` recomputes all four `PRType` aggregates from the complete current working-set history every call — this is what makes edits/deletes correctly demote a record instead of leaving it stale. See `docs/TECHNICAL_PLAN.md` §4.
+- **Round every computed PR metric to 2 decimals (`round2` in `lib/pr.ts`) before comparing or storing it.** `valueKg`/`volumeKg` are `Decimal(_, 2)` columns; the Epley e1RM formula produces float noise (e.g. `120 * (1 + 1/30) === 124.00000000000001`), which would never exactly equal the `124.00` read back from the DB on the next call — without rounding, that mismatch falsely registers as "changed" (and even as a new record) on every subsequent recalculation, forever. Caught by an ad hoc verification script against the real DB, not by lint/types — if you touch this file, re-verify with real data, not just `tsc`.
 - **RLS policies on non-directly-owned tables need a join.** `SetEntry` isn't owned by `User` directly — its policy has to walk `SetEntry → WorkoutExercise → WorkoutSession → userId`. Directly-owned tables (`Routine`, `WorkoutSession`, `BodyweightEntry`, `PersonalRecord`, custom `Exercise` rows) use the simpler `auth.uid() = "userId"` form. See `docs/TECHNICAL_PLAN.md` §3.
 - **Two DB connection strings, different jobs.** `DATABASE_URL` (pooled/pgbouncer, port 6543) is what the app uses at runtime via `lib/db.ts`. `DIRECT_URL` (unpooled, port 5432) is what `prisma7.config.ts` uses for migrations/introspection — Prisma 7 dropped schema-level `directUrl`, so this split is enforced by which var each file reads, not by Prisma itself.
 - **Account deletion needs two systems, not one.** Every Prisma-modeled table cascades from `User` via `ON DELETE CASCADE`, but the Supabase `auth.users` row is separate and needs the Supabase Admin API (`SUPABASE_SERVICE_ROLE_KEY`, server-only) to remove — a Prisma-only delete leaves an orphaned auth account.
@@ -84,17 +85,34 @@ rows (weight converted to canonical kg via `lib/units.ts`, optional
 warm-up/working tag and RPE), and saves a free-text note per exercise
 (`WorkoutExercise.note`). Finishing a session sets `finishedAt` and
 switches the page to a read-only view (no edit forms). The dashboard shows
-real history (name, date, exercise count, status) with inline rename.
-**No PR detection is wired in yet** — `lib/pr.ts` is still the stub from
-scaffolding; that's the next step. Every `WorkoutSession`/`WorkoutExercise`
-query in these actions is explicitly scoped to the authenticated user
-(directly or via the `session` relation) — same reasoning as the RLS note
-above.
+real history (name, date, exercise count, status) with inline rename. Every
+`WorkoutSession`/`WorkoutExercise` query in these actions is explicitly
+scoped to the authenticated user (directly or via the `session` relation) —
+same reasoning as the RLS note above.
 
-Every other app page (`exercises/[exerciseId]` history, `routines/*`,
-`bodyweight`, `settings`) is still a static placeholder.
+**PR detection is complete** (`docs/TECHNICAL_PLAN.md` §8 step 5):
+`lib/pr.ts`'s `recalculatePersonalRecords` is fully implemented (see the
+"round every computed metric" convention above — that bug was real and was
+only caught by testing against actual data). `logSet`
+(`app/(app)/workout/[sessionId]/actions.ts`) calls it after every working-set
+create (warm-ups are skipped — they can never affect a record) and redirects
+with `?pr=TYPE,TYPE` for any genuinely new record, which the session page
+renders as a celebration banner; sets that currently hold a record get an
+inline "🏆 PR" badge (`prTypesBySetEntryId` lookup, keyed by `PersonalRecord.setEntryId` — note `SESSION_VOLUME` has no single owning set, so it's excluded from that badge and only shown in the banner/exercise page).
+`app/(app)/exercises/[exerciseId]/page.tsx` (previously a stub) now shows
+the exercise's current PRs plus its full set history — this is the "PR
+history view" from `docs/PRD.md`'s MVP feature list; the progress *chart*
+(Recharts) is still a separate, not-yet-done TODO on that page. **No UI
+calls `recalculatePersonalRecords` on edit/delete yet** — there is no
+edit/delete UI at all, that's the next build-order step, but the function
+itself is already written to handle it correctly (full recompute, not
+incremental) per `docs/TECHNICAL_PLAN.md` §4.
 
-Remaining build order (`docs/TECHNICAL_PLAN.md` §8): PR detection
-implementation → edit/delete UI → routines UI → bodyweight UI → account
-deletion + RLS verification → PWA polish. Update this section as steps
-land so a fresh session can see what's actually done vs. still planned.
+Every other app page (`routines/*`, `bodyweight`, `settings`) is still a
+static placeholder.
+
+Remaining build order (`docs/TECHNICAL_PLAN.md` §8): edit/delete UI (wire
+into the existing `recalculatePersonalRecords`) → routines UI → bodyweight
+UI → account deletion + RLS verification → PWA polish. Update this section
+as steps land so a fresh session can see what's actually done vs. still
+planned.

@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { formatWeight } from "@/lib/units";
+import { PR_TYPE_LABELS } from "@/lib/pr";
+import { PRType } from "@/generated/prisma/client";
 import { createClient } from "@/lib/supabase/server";
 import {
   addExerciseToSession,
@@ -14,10 +16,13 @@ export default async function WorkoutSessionPage({
   searchParams,
 }: {
   params: Promise<{ sessionId: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; pr?: string }>;
 }) {
   const { sessionId } = await params;
-  const { error } = await searchParams;
+  const { error, pr } = await searchParams;
+  // Only ever set by logSet right after a genuine new record — see
+  // lib/pr.ts. Comma-separated PRType names, e.g. "MAX_WEIGHT,BEST_E1RM".
+  const newRecordTypes = pr ? (pr.split(",") as PRType[]) : [];
 
   const supabase = await createClient();
   const {
@@ -53,6 +58,26 @@ export default async function WorkoutSessionPage({
       select: { unitPreference: true },
     }),
   ]);
+
+  // Current PRs (MAX_WEIGHT/MAX_REPS/BEST_E1RM only — SESSION_VOLUME isn't
+  // tied to one set) for the exercises in this session, so a still-standing
+  // record can be badged on the set that holds it, not just celebrated once
+  // at the moment it was set.
+  const personalRecords = await prisma.personalRecord.findMany({
+    where: {
+      userId: user.id,
+      exerciseId: { in: workoutExercises.map((we) => we.exerciseId) },
+      setEntryId: { not: null },
+    },
+  });
+  const prTypesBySetEntryId = new Map<string, PRType[]>();
+  for (const record of personalRecords) {
+    if (!record.setEntryId) continue;
+    const types = prTypesBySetEntryId.get(record.setEntryId) ?? [];
+    types.push(record.recordType);
+    prTypesBySetEntryId.set(record.setEntryId, types);
+  }
+
   const muscleGroups = [...new Set(availableExercises.map((e) => e.muscleGroup))];
   const unit = profile?.unitPreference ?? "KG";
   const unitLabel = unit === "LB" ? "lb" : "kg";
@@ -75,6 +100,14 @@ export default async function WorkoutSessionPage({
         </p>
       )}
 
+      {newRecordTypes.length > 0 && (
+        <p className="rounded bg-yellow-50 p-3 text-sm font-medium text-yellow-800">
+          🏆 New PR
+          {newRecordTypes.length > 1 ? "s" : ""}:{" "}
+          {newRecordTypes.map((t) => PR_TYPE_LABELS[t]).join(", ")}
+        </p>
+      )}
+
       {workoutExercises.length === 0 ? (
         <p className="text-sm text-gray-500">No exercises logged yet.</p>
       ) : (
@@ -91,6 +124,15 @@ export default async function WorkoutSessionPage({
                       {unitLabel} × {set.reps} reps
                       {set.setType === "WARMUP" && " (warm-up)"}
                       {set.rpe !== null && ` — RPE ${Number(set.rpe)}`}
+                      {prTypesBySetEntryId.get(set.id)?.map((type) => (
+                        <span
+                          key={type}
+                          title={PR_TYPE_LABELS[type]}
+                          className="ml-2 rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-800"
+                        >
+                          🏆 PR
+                        </span>
+                      ))}
                     </li>
                   ))}
                 </ul>

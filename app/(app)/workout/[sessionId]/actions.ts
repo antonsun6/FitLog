@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { SetType } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { lbToKg } from "@/lib/units";
+import { recalculatePersonalRecords } from "@/lib/pr";
 import { createClient } from "@/lib/supabase/server";
 
 function fail(sessionId: string, message: string): never {
@@ -130,7 +131,7 @@ export async function logSet(formData: FormData) {
   // this file: Prisma bypasses RLS, so this join is the actual boundary.
   const workoutExercise = await prisma.workoutExercise.findFirst({
     where: { id: workoutExerciseId, session: { userId: user.id } },
-    select: { id: true, sessionId: true },
+    select: { id: true, sessionId: true, exerciseId: true },
   });
   if (!workoutExercise) {
     fail(sessionId, "That exercise could not be found in this session.");
@@ -151,7 +152,22 @@ export async function logSet(formData: FormData) {
     data: { workoutExerciseId, weightKg, reps, setType, rpe, order },
   });
 
-  redirect(`/workout/${workoutExercise.sessionId}`);
+  // Only working sets count toward records (see lib/pr.ts) — recalculating
+  // after a warm-up would be wasted work and can never change anything.
+  let newRecordTypes: string[] = [];
+  if (setType === SetType.WORKING) {
+    const results = await recalculatePersonalRecords(
+      user.id,
+      workoutExercise.exerciseId,
+    );
+    newRecordTypes = results
+      .filter((r) => r.isNewRecord)
+      .map((r) => r.recordType);
+  }
+
+  const prQuery =
+    newRecordTypes.length > 0 ? `?pr=${newRecordTypes.join(",")}` : "";
+  redirect(`/workout/${workoutExercise.sessionId}${prQuery}`);
 }
 
 export async function saveExerciseNote(formData: FormData) {
