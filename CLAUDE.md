@@ -102,17 +102,38 @@ inline "🏆 PR" badge (`prTypesBySetEntryId` lookup, keyed by `PersonalRecord.s
 `app/(app)/exercises/[exerciseId]/page.tsx` (previously a stub) now shows
 the exercise's current PRs plus its full set history — this is the "PR
 history view" from `docs/PRD.md`'s MVP feature list; the progress *chart*
-(Recharts) is still a separate, not-yet-done TODO on that page. **No UI
-calls `recalculatePersonalRecords` on edit/delete yet** — there is no
-edit/delete UI at all, that's the next build-order step, but the function
-itself is already written to handle it correctly (full recompute, not
-incremental) per `docs/TECHNICAL_PLAN.md` §4.
+(Recharts) is still a separate, not-yet-done TODO on that page.
+
+**Edit/delete UI is complete** (`docs/TECHNICAL_PLAN.md` §8 step 6):
+`updateSet`/`deleteSet`/`deleteWorkoutExercise`
+(`app/(app)/workout/[sessionId]/actions.ts`) and `deleteWorkoutSession`
+(`app/(app)/workout/actions.ts`) all call `recalculatePersonalRecords`
+afterward, same as `logSet` — verified against real data (ownership-join
+scoping, cascade deletes, and PR promotion/demotion/clearing) with another
+throwaway script, same approach as the PR-detection verification above.
+Editing/deleting works even on a *finished* session (only adding new
+sets/exercises stays locked once finished) — correcting history is
+explicitly in scope per `docs/PRD.md` "Data editing", distinct from new
+logging. `updateSet` deliberately never passes a `?pr=` celebration param
+even if a record moves, per `docs/TECHNICAL_PLAN.md` §4 ("only fire that
+celebration on create, never on a retroactive edit"). The two genuinely
+destructive actions (remove exercise, delete whole workout) go through a
+new `components/ConfirmSubmitButton.tsx` (client component, `window.confirm`
+before submit); single-set delete doesn't bother — low-stakes, trivially
+redone by re-logging.
 
 Every other app page (`routines/*`, `bodyweight`, `settings`) is still a
 static placeholder.
 
-Remaining build order (`docs/TECHNICAL_PLAN.md` §8): edit/delete UI (wire
-into the existing `recalculatePersonalRecords`) → routines UI → bodyweight
-UI → account deletion + RLS verification → PWA polish. Update this section
-as steps land so a fresh session can see what's actually done vs. still
-planned.
+**Operational note**: this Supabase project is on the free tier and
+auto-pauses after a period of inactivity — its pooler connection fails with
+`(ENOTFOUND) tenant/user ... not found` while paused, even though the
+REST/Auth API comes back online first. Resuming it from the dashboard can
+take a few minutes for the pooler specifically to catch up after the
+REST API already looks fine — if `pnpm dev` or a verification script can't
+connect, check the dashboard before assuming the code broke.
+
+Remaining build order (`docs/TECHNICAL_PLAN.md` §8): routines UI →
+bodyweight UI → account deletion + RLS verification → PWA polish. Update
+this section as steps land so a fresh session can see what's actually done
+vs. still planned.

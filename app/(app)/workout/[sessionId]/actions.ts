@@ -170,6 +170,166 @@ export async function logSet(formData: FormData) {
   redirect(`/workout/${workoutExercise.sessionId}${prQuery}`);
 }
 
+export async function updateSet(formData: FormData) {
+  const sessionId = formData.get("sessionId");
+  const setEntryId = formData.get("setEntryId");
+  const weightRaw = formData.get("weight");
+  const repsRaw = formData.get("reps");
+  const setTypeRaw = formData.get("setType");
+  const rpeRaw = formData.get("rpe");
+
+  if (typeof sessionId !== "string" || !sessionId) {
+    redirect("/dashboard");
+  }
+  if (typeof setEntryId !== "string" || !setEntryId) {
+    fail(sessionId, "Could not identify which set to update.");
+  }
+  if (
+    typeof weightRaw !== "string" ||
+    !weightRaw ||
+    typeof repsRaw !== "string" ||
+    !repsRaw
+  ) {
+    fail(sessionId, "Weight and reps are required.");
+  }
+
+  const weight = Number(weightRaw);
+  const reps = Number(repsRaw);
+  if (!Number.isFinite(weight) || weight <= 0) {
+    fail(sessionId, "Enter a valid weight greater than 0.");
+  }
+  if (!Number.isInteger(reps) || reps <= 0) {
+    fail(sessionId, "Reps must be a whole number greater than 0.");
+  }
+
+  let rpe: number | null = null;
+  if (typeof rpeRaw === "string" && rpeRaw) {
+    rpe = Number(rpeRaw);
+    if (!Number.isFinite(rpe) || rpe < 1 || rpe > 10) {
+      fail(sessionId, "RPE must be a number between 1 and 10.");
+    }
+  }
+
+  const setType = setTypeRaw === "WARMUP" ? SetType.WARMUP : SetType.WORKING;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/sign-in");
+  }
+
+  // SetEntry has no direct userId — ownership has to be checked through the
+  // full workoutExercise → session chain, same reasoning as everywhere else
+  // in this file: Prisma bypasses RLS, so this join is the actual boundary.
+  // Editing (not just logging) is explicitly an MVP feature — see
+  // docs/PRD.md "Data editing" — so this intentionally works even once the
+  // session is finished, unlike logSet/addExerciseToSession.
+  const setEntry = await prisma.setEntry.findFirst({
+    where: { id: setEntryId, workoutExercise: { session: { userId: user.id } } },
+    select: { workoutExercise: { select: { exerciseId: true } } },
+  });
+  if (!setEntry) {
+    fail(sessionId, "That set could not be found.");
+  }
+
+  const profile = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { unitPreference: true },
+  });
+  const weightKg = profile?.unitPreference === "LB" ? lbToKg(weight) : weight;
+
+  await prisma.setEntry.update({
+    where: { id: setEntryId },
+    data: { weightKg, reps, setType, rpe },
+  });
+
+  // Recompute from scratch — a full recompute (not incremental) is what
+  // correctly promotes OR demotes a record after an edit, same algorithm as
+  // logSet uses. We deliberately don't surface a "New PR!" celebration here
+  // even if a record moved: per docs/TECHNICAL_PLAN.md §4, that celebration
+  // is reserved for the moment a set is first logged, not a retroactive
+  // correction.
+  await recalculatePersonalRecords(user.id, setEntry.workoutExercise.exerciseId);
+
+  redirect(`/workout/${sessionId}`);
+}
+
+export async function deleteSet(formData: FormData) {
+  const sessionId = formData.get("sessionId");
+  const setEntryId = formData.get("setEntryId");
+
+  if (typeof sessionId !== "string" || !sessionId) {
+    redirect("/dashboard");
+  }
+  if (typeof setEntryId !== "string" || !setEntryId) {
+    fail(sessionId, "Could not identify which set to delete.");
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/sign-in");
+  }
+
+  const setEntry = await prisma.setEntry.findFirst({
+    where: { id: setEntryId, workoutExercise: { session: { userId: user.id } } },
+    select: { workoutExercise: { select: { exerciseId: true } } },
+  });
+  if (!setEntry) {
+    fail(sessionId, "That set could not be found.");
+  }
+
+  await prisma.setEntry.delete({ where: { id: setEntryId } });
+
+  // A full recompute naturally demotes (or clears) whatever record this set
+  // held, rather than leaving a stale value — see docs/TECHNICAL_PLAN.md §4.
+  await recalculatePersonalRecords(user.id, setEntry.workoutExercise.exerciseId);
+
+  redirect(`/workout/${sessionId}`);
+}
+
+export async function deleteWorkoutExercise(formData: FormData) {
+  const sessionId = formData.get("sessionId");
+  const workoutExerciseId = formData.get("workoutExerciseId");
+
+  if (typeof sessionId !== "string" || !sessionId) {
+    redirect("/dashboard");
+  }
+  if (typeof workoutExerciseId !== "string" || !workoutExerciseId) {
+    fail(sessionId, "Could not identify which exercise to remove.");
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/sign-in");
+  }
+
+  const workoutExercise = await prisma.workoutExercise.findFirst({
+    where: { id: workoutExerciseId, session: { userId: user.id } },
+    select: { exerciseId: true },
+  });
+  if (!workoutExercise) {
+    fail(sessionId, "That exercise could not be found in this session.");
+  }
+
+  // Cascades its SetEntry rows (schema: onDelete: Cascade).
+  await prisma.workoutExercise.delete({ where: { id: workoutExerciseId } });
+
+  // Recompute from scratch for the exercise that just lost all its sets in
+  // this session — lib/pr.ts clears any PersonalRecord that no longer has
+  // supporting data.
+  await recalculatePersonalRecords(user.id, workoutExercise.exerciseId);
+
+  redirect(`/workout/${sessionId}`);
+}
+
 export async function saveExerciseNote(formData: FormData) {
   const sessionId = formData.get("sessionId");
   const workoutExerciseId = formData.get("workoutExerciseId");

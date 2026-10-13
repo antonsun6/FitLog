@@ -4,11 +4,16 @@ import { formatWeight } from "@/lib/units";
 import { PR_TYPE_LABELS } from "@/lib/pr";
 import { PRType } from "@/generated/prisma/client";
 import { createClient } from "@/lib/supabase/server";
+import { ConfirmSubmitButton } from "@/components/ConfirmSubmitButton";
+import { deleteWorkoutSession } from "../actions";
 import {
   addExerciseToSession,
+  deleteSet,
+  deleteWorkoutExercise,
   finishWorkoutSession,
   logSet,
   saveExerciseNote,
+  updateSet,
 } from "./actions";
 
 export default async function WorkoutSessionPage({
@@ -85,13 +90,24 @@ export default async function WorkoutSessionPage({
 
   return (
     <main className="flex flex-1 flex-col gap-6 p-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold">{session.name}</h1>
-        <p className="text-sm text-gray-500">
-          {session.startedAt.toLocaleString()}
-          {isFinished &&
-            ` · Completed ${session.finishedAt!.toLocaleString()}`}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold">{session.name}</h1>
+          <p className="text-sm text-gray-500">
+            {session.startedAt.toLocaleString()}
+            {isFinished &&
+              ` · Completed ${session.finishedAt!.toLocaleString()}`}
+          </p>
+        </div>
+        <form action={deleteWorkoutSession}>
+          <input type="hidden" name="sessionId" value={sessionId} />
+          <ConfirmSubmitButton
+            confirmMessage={`Delete "${session.name}" and everything logged in it? This can't be undone.`}
+            className="shrink-0 text-xs text-red-600 underline"
+          >
+            Delete workout
+          </ConfirmSubmitButton>
+        </form>
       </div>
 
       {error && (
@@ -114,21 +130,89 @@ export default async function WorkoutSessionPage({
         <ul className="flex flex-col gap-4">
           {workoutExercises.map((we) => (
             <li key={we.id} className="flex flex-col gap-3 rounded border p-4">
-              <h3 className="font-medium">{we.exercise.name}</h3>
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="font-medium">{we.exercise.name}</h3>
+                <form action={deleteWorkoutExercise}>
+                  <input type="hidden" name="sessionId" value={sessionId} />
+                  <input type="hidden" name="workoutExerciseId" value={we.id} />
+                  <ConfirmSubmitButton
+                    confirmMessage={`Remove ${we.exercise.name} and all its sets from this workout?`}
+                    className="shrink-0 text-xs text-red-600 underline"
+                  >
+                    Remove exercise
+                  </ConfirmSubmitButton>
+                </form>
+              </div>
 
               {we.sets.length > 0 && (
-                <ul className="flex flex-col gap-1 text-sm text-gray-600">
+                <ul className="flex flex-col gap-2 text-sm text-gray-600">
                   {we.sets.map((set, i) => (
-                    <li key={set.id}>
-                      Set {i + 1}: {formatWeight(Number(set.weightKg), unit)}{" "}
-                      {unitLabel} × {set.reps} reps
-                      {set.setType === "WARMUP" && " (warm-up)"}
-                      {set.rpe !== null && ` — RPE ${Number(set.rpe)}`}
+                    <li key={set.id} className="flex flex-wrap items-center gap-2">
+                      <span className="w-12 shrink-0 text-gray-400">
+                        Set {i + 1}
+                      </span>
+                      <form
+                        action={updateSet}
+                        className="flex flex-wrap items-center gap-1"
+                      >
+                        <input type="hidden" name="sessionId" value={sessionId} />
+                        <input type="hidden" name="setEntryId" value={set.id} />
+                        <input
+                          type="number"
+                          name="weight"
+                          step="0.5"
+                          min="0"
+                          defaultValue={formatWeight(Number(set.weightKg), unit)}
+                          className="w-20 rounded border px-1.5 py-0.5"
+                        />
+                        <span>{unitLabel}</span>
+                        <span>×</span>
+                        <input
+                          type="number"
+                          name="reps"
+                          step="1"
+                          min="1"
+                          defaultValue={set.reps}
+                          className="w-16 rounded border px-1.5 py-0.5"
+                        />
+                        <span>reps</span>
+                        <select
+                          name="setType"
+                          defaultValue={set.setType}
+                          className="rounded border px-1 py-0.5"
+                        >
+                          <option value="WORKING">Working</option>
+                          <option value="WARMUP">Warm-up</option>
+                        </select>
+                        <input
+                          type="number"
+                          name="rpe"
+                          step="0.5"
+                          min="1"
+                          max="10"
+                          placeholder="RPE"
+                          defaultValue={set.rpe !== null ? Number(set.rpe) : ""}
+                          className="w-16 rounded border px-1.5 py-0.5"
+                        />
+                        <button type="submit" className="text-xs underline">
+                          Save
+                        </button>
+                      </form>
+                      <form action={deleteSet}>
+                        <input type="hidden" name="sessionId" value={sessionId} />
+                        <input type="hidden" name="setEntryId" value={set.id} />
+                        <button
+                          type="submit"
+                          className="text-xs text-red-600 underline"
+                        >
+                          Delete
+                        </button>
+                      </form>
                       {prTypesBySetEntryId.get(set.id)?.map((type) => (
                         <span
                           key={type}
                           title={PR_TYPE_LABELS[type]}
-                          className="ml-2 rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-800"
+                          className="rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-800"
                         >
                           🏆 PR
                         </span>
@@ -138,100 +222,90 @@ export default async function WorkoutSessionPage({
                 </ul>
               )}
 
-              {isFinished ? (
-                we.note && (
-                  <p className="text-sm text-gray-600">Note: {we.note}</p>
-                )
-              ) : (
-                <>
-                  <form
-                    action={logSet}
-                    className="flex flex-wrap items-end gap-2"
-                  >
-                    <input type="hidden" name="sessionId" value={sessionId} />
+              {!isFinished && (
+                <form
+                  action={logSet}
+                  className="flex flex-wrap items-end gap-2"
+                >
+                  <input type="hidden" name="sessionId" value={sessionId} />
+                  <input
+                    type="hidden"
+                    name="workoutExerciseId"
+                    value={we.id}
+                  />
+                  <label className="flex flex-col gap-1 text-xs">
+                    Weight ({unitLabel})
                     <input
-                      type="hidden"
-                      name="workoutExerciseId"
-                      value={we.id}
+                      type="number"
+                      name="weight"
+                      step="0.5"
+                      min="0"
+                      required
+                      className="w-24 rounded border px-2 py-1"
                     />
-                    <label className="flex flex-col gap-1 text-xs">
-                      Weight ({unitLabel})
-                      <input
-                        type="number"
-                        name="weight"
-                        step="0.5"
-                        min="0"
-                        required
-                        className="w-24 rounded border px-2 py-1"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-xs">
-                      Reps
-                      <input
-                        type="number"
-                        name="reps"
-                        step="1"
-                        min="1"
-                        required
-                        className="w-20 rounded border px-2 py-1"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-xs">
-                      Type
-                      <select
-                        name="setType"
-                        defaultValue="WORKING"
-                        className="rounded border px-2 py-1"
-                      >
-                        <option value="WORKING">Working</option>
-                        <option value="WARMUP">Warm-up</option>
-                      </select>
-                    </label>
-                    <label className="flex flex-col gap-1 text-xs">
-                      RPE (optional)
-                      <input
-                        type="number"
-                        name="rpe"
-                        step="0.5"
-                        min="1"
-                        max="10"
-                        className="w-20 rounded border px-2 py-1"
-                      />
-                    </label>
-                    <button
-                      type="submit"
-                      className="rounded bg-black px-3 py-1.5 text-sm text-white"
-                    >
-                      Log set
-                    </button>
-                  </form>
-
-                  <form
-                    action={saveExerciseNote}
-                    className="flex flex-col gap-1"
-                  >
-                    <input type="hidden" name="sessionId" value={sessionId} />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs">
+                    Reps
                     <input
-                      type="hidden"
-                      name="workoutExerciseId"
-                      value={we.id}
+                      type="number"
+                      name="reps"
+                      step="1"
+                      min="1"
+                      required
+                      className="w-20 rounded border px-2 py-1"
                     />
-                    <textarea
-                      name="note"
-                      rows={2}
-                      defaultValue={we.note ?? ""}
-                      placeholder="Note (e.g. felt easy, bump next time)"
-                      className="rounded border px-2 py-1 text-sm"
-                    />
-                    <button
-                      type="submit"
-                      className="w-fit text-xs text-gray-600 underline"
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs">
+                    Type
+                    <select
+                      name="setType"
+                      defaultValue="WORKING"
+                      className="rounded border px-2 py-1"
                     >
-                      Save note
-                    </button>
-                  </form>
-                </>
+                      <option value="WORKING">Working</option>
+                      <option value="WARMUP">Warm-up</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs">
+                    RPE (optional)
+                    <input
+                      type="number"
+                      name="rpe"
+                      step="0.5"
+                      min="1"
+                      max="10"
+                      className="w-20 rounded border px-2 py-1"
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    className="rounded bg-black px-3 py-1.5 text-sm text-white"
+                  >
+                    Log set
+                  </button>
+                </form>
               )}
+
+              {/* Notes stay editable even after the session is finished —
+                  correcting a note is "data editing" (docs/PRD.md), not new
+                  logging. */}
+              <form action={saveExerciseNote} className="flex flex-col gap-1">
+                <input type="hidden" name="sessionId" value={sessionId} />
+                <input type="hidden" name="workoutExerciseId" value={we.id} />
+                <textarea
+                  name="note"
+                  rows={2}
+                  defaultValue={we.note ?? ""}
+                  placeholder="Note (e.g. felt easy, bump next time)"
+                  className="rounded border px-2 py-1 text-sm"
+                />
+                <button
+                  type="submit"
+                  className="w-fit text-xs text-gray-600 underline"
+                >
+                  Save note
+                </button>
+              </form>
             </li>
           ))}
         </ul>
