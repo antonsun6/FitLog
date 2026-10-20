@@ -80,7 +80,15 @@ after a real bug: Supabase's `signUp()` returns a success-shaped response
 so sign-up's own error handling only ever saw the resulting Prisma
 `P2002` on `User.email` — now caught specifically and pointed at sign-in /
 this reset flow instead of the dead-end "contact support" message it used
-to show.
+to show. **Operational note**: Supabase's free-tier built-in mailer has a
+low send-rate limit — testing sign-up/reset repeatedly in a short span
+will hit `429 over_email_send_rate_limit`. `requestPasswordReset` now
+surfaces that specific error to the user (it reveals nothing about any
+individual account) instead of silently swallowing it like other
+reset-related errors. If "no email arrives" comes up again, check this
+before assuming the code regressed; a real deployment needs custom SMTP
+configured in Supabase (Project Settings → Auth → SMTP Settings), not the
+shared default.
 
 **Exercise library UI is complete** (`docs/TECHNICAL_PLAN.md` §8 step 3):
 `app/(app)/exercises/page.tsx` lists library exercises (`ownerId: null`)
