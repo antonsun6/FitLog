@@ -1,10 +1,11 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { SetType } from "@/generated/prisma/client";
+import { Prisma, SetType } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { lbToKg } from "@/lib/units";
 import { recalculatePersonalRecords } from "@/lib/pr";
+import { getAvailableMuscleGroups } from "@/lib/muscle-groups";
 import { createClient } from "@/lib/supabase/server";
 
 function fail(sessionId: string, message: string): never {
@@ -55,13 +56,28 @@ export async function addExerciseToSession(formData: FormData) {
 
   if (!exercise) {
     if (typeof muscleGroup !== "string" || !muscleGroup) {
-      fail(sessionId, "Enter a muscle group to add this as a new exercise.");
+      fail(sessionId, "Pick a muscle group to add this as a new exercise.");
+    }
+    // The muscle group field is a <select> of known categories, but a
+    // request can always be forged — re-validate rather than trusting it.
+    const available = await getAvailableMuscleGroups(user.id);
+    if (!available.some((g) => g.toLowerCase() === muscleGroup.toLowerCase())) {
+      fail(
+        sessionId,
+        `"${muscleGroup}" isn't a known category — add it from the Exercises page first.`,
+      );
     }
     try {
       exercise = await prisma.exercise.create({
         data: { name, muscleGroup, isCustom: true, ownerId: user.id },
       });
     } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        fail(sessionId, `You already have a custom exercise named "${name}".`);
+      }
       console.error("Failed to create exercise from workout session:", error);
       fail(sessionId, "Something went wrong adding that exercise.");
     }

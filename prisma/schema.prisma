@@ -37,6 +37,7 @@ model User {
   createdAt      DateTime @default(now())
 
   exercises         Exercise[]
+  muscleGroups      MuscleGroup[]
   routines          Routine[]
   workoutSessions   WorkoutSession[]
   personalRecords   PersonalRecord[]
@@ -58,6 +59,32 @@ model Exercise {
 
   // Prevents duplicate custom exercise names per user; multiple library rows
   // (ownerId null) can't collide here since NULL is never treated as equal to NULL.
+  // NOTE: this alone is case-sensitive ("Smith Machine Press" !=
+  // "smith Machine Press") and was caught letting a real duplicate through
+  // via a race between two concurrent create requests that both passed the
+  // app-level case-insensitive pre-check before either committed. The actual
+  // guarantee is the case-insensitive expression index added by migration
+  // 20261020000000_case_insensitive_names (ownerId, lower(name)) — see that
+  // migration's raw SQL. Kept here too since it's harmless and some code
+  // still relies on the generated ownerId_name compound-unique input shape.
+  @@unique([ownerId, name])
+}
+
+// User-defined exercise categories, additive to the fixed canonical list in
+// lib/muscle-groups.ts (Chest, Back, Shoulders, ... — those aren't rows,
+// just a hardcoded display order). Lets someone pre-declare a category
+// (e.g. "Grip") before any exercise uses it, and delete one later. Always
+// user-scoped — there's no "library" MuscleGroup the way there's a library
+// Exercise, since the canonical list already covers that role.
+model MuscleGroup {
+  id        String   @id @default(uuid())
+  name      String
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  // Same case-sensitivity caveat as Exercise above — see migration
+  // 20261020000000_case_insensitive_names for the real (lower(name)) guarantee.
   @@unique([ownerId, name])
 }
 

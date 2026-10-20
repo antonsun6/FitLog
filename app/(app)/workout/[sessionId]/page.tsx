@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { formatWeight } from "@/lib/units";
 import { PR_TYPE_LABELS } from "@/lib/pr";
 import { PRType } from "@/generated/prisma/client";
+import { getAvailableMuscleGroups } from "@/lib/muscle-groups";
 import { createClient } from "@/lib/supabase/server";
 import { ConfirmSubmitButton } from "@/components/ConfirmSubmitButton";
 import { deleteWorkoutSession } from "../actions";
@@ -83,7 +84,7 @@ export default async function WorkoutSessionPage({
     prTypesBySetEntryId.set(record.setEntryId, types);
   }
 
-  const muscleGroups = [...new Set(availableExercises.map((e) => e.muscleGroup))];
+  const muscleGroups = await getAvailableMuscleGroups(user.id);
   const unit = profile?.unitPreference ?? "KG";
   const unitLabel = unit === "LB" ? "lb" : "kg";
   const isFinished = session.finishedAt !== null;
@@ -335,17 +336,18 @@ export default async function WorkoutSessionPage({
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Muscle group (only needed if new)
-              <input
-                type="text"
+              <select
                 name="muscleGroup"
-                list="muscle-groups"
+                defaultValue=""
                 className="rounded border px-3 py-2"
-              />
-              <datalist id="muscle-groups">
+              >
+                <option value="">— pick if adding a new exercise —</option>
                 {muscleGroups.map((group) => (
-                  <option key={group} value={group} />
+                  <option key={group} value={group}>
+                    {group}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </label>
             <button
               type="submit"
