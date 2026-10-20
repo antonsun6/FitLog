@@ -94,12 +94,38 @@ shared default.
 `app/(app)/exercises/page.tsx` lists library exercises (`ownerId: null`)
 plus the signed-in user's own custom ones, grouped by muscle group; the
 "add custom exercise" form (`app/(app)/exercises/actions.ts`) creates one
-scoped to `ownerId: user.id`, with a case-insensitive duplicate-name check
-(the DB's `@@unique([ownerId, name])` alone is case-sensitive) backed by a
-P2002 catch as a fallback. `app/(app)/exercises/[exerciseId]/page.tsx`
-(per-exercise history) is still a stub — it depends on workout logging
-existing, which is the next step. Nav links between app pages were added
-to `app/(app)/layout.tsx` alongside sign-out.
+scoped to `ownerId: user.id`. `app/(app)/exercises/[exerciseId]/page.tsx`
+(per-exercise history) is still a stub for its progress *chart* — it now
+shows PRs and full history (see PR detection below), just not a graph yet.
+Nav links between app pages were added to `app/(app)/layout.tsx` alongside
+sign-out. No "Custom" badge on custom exercises per request — nothing
+distinguishes them visually from library ones.
+
+**Muscle group / category system** (`lib/muscle-groups.ts`): a fixed
+canonical display order — Chest, Back, Shoulders, Biceps, Triceps, Quads,
+Hamstrings, Calves, Abductor/Adductor, Abs, Forearms — plus a `MuscleGroup`
+model for user-scoped custom categories (addable/deletable from the
+Exercises page). Deleting a category is blocked while any exercise still
+uses it (no exercise-reassignment UI exists to fall back on). Exercise
+creation everywhere (Exercises page, and the in-session "add exercise"
+flow) uses a `<select>` built from `getAvailableMuscleGroups()` — canonical
++ the user's own custom ones — not a free-text input, so a stray/unregistered
+category string can no longer get created going forward.
+
+**Case-insensitive name uniqueness is enforced at the DB level, not just
+app-level pre-checks.** A real duplicate ("Smith Machine Press" / "smith
+Machine Press", same user) existed in production data: the app's
+`findFirst` pre-check before `create` has a race window between two
+concurrent requests, and `@@unique([ownerId, name])` in `schema.prisma` is
+case-SENSITIVE so it didn't catch it either. The actual fix is in migration
+`20261020044809_add_muscle_groups`'s hand-added raw SQL:
+`CREATE UNIQUE INDEX ... ON "Exercise" ("ownerId", lower("name"))` (and the
+same for `MuscleGroup`). Prisma's schema DSL can't express a function-based
+index, so this kind of constraint always needs a migration hand-edit —
+`prisma migrate dev --create-only`, edit the generated `migration.sql`,
+then `prisma migrate dev` (no name) to apply. If another case-insensitive
+uniqueness need comes up, follow the same pattern rather than trusting the
+app-level check alone.
 
 **Core workout logging is complete** (`docs/TECHNICAL_PLAN.md` §8 step 4):
 `app/(app)/workout/new/page.tsx` starts a `WorkoutSession` (optional custom
