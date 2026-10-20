@@ -46,6 +46,12 @@ export default async function SignInPage({
       </form>
 
       <p className="text-sm text-gray-500">
+        <Link href="/reset-password" className="underline">
+          Forgot your password?
+        </Link>
+      </p>
+
+      <p className="text-sm text-gray-500">
         Don&apos;t have an account?{" "}
         <Link href="/sign-up" className="underline">
           Sign up

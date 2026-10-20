@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { createClient } from "@/lib/supabase/server";
-import { Unit } from "@/generated/prisma/client";
+import { Prisma, Unit } from "@/generated/prisma/client";
 
 function fail(message: string): never {
   redirect(`/sign-up?error=${encodeURIComponent(message)}`);
@@ -54,6 +54,20 @@ export async function signUp(formData: FormData) {
       },
     });
   } catch (dbError) {
+    // Supabase's signUp() deliberately returns a success-shaped response
+    // (no `error`, a `data.user`) when called with an email that's already
+    // registered — an anti-enumeration measure, not a bug on their end. We
+    // only find out here, when the email's uniqueness constraint on `User`
+    // rejects it. This is an expected, recoverable case, not a real
+    // failure — give an actionable message instead of a dead end.
+    if (
+      dbError instanceof Prisma.PrismaClientKnownRequestError &&
+      dbError.code === "P2002"
+    ) {
+      fail(
+        "An account with this email already exists. Sign in instead — if you've forgotten your password, use the reset link on the sign-in page.",
+      );
+    }
     console.error("Failed to create User profile after sign-up:", dbError);
     fail(
       "Account created but profile setup failed — contact support rather than retrying sign-up with the same email.",
