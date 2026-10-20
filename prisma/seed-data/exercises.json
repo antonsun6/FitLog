@@ -1,12 +1,16 @@
 [
-  { "name": "Barbell Back Squat", "muscleGroup": "Legs" },
+  { "name": "Barbell Back Squat", "muscleGroup": "Quads" },
   { "name": "Barbell Bench Press", "muscleGroup": "Chest" },
   { "name": "Conventional Deadlift", "muscleGroup": "Back" },
   { "name": "Overhead Press", "muscleGroup": "Shoulders" },
   { "name": "Barbell Row", "muscleGroup": "Back" },
   { "name": "Pull-Up", "muscleGroup": "Back" },
-  { "name": "Dumbbell Bicep Curl", "muscleGroup": "Arms" },
-  { "name": "Triceps Pushdown", "muscleGroup": "Arms" },
-  { "name": "Leg Press", "muscleGroup": "Legs" },
-  { "name": "Romanian Deadlift", "muscleGroup": "Legs" }
+  { "name": "Dumbbell Bicep Curl", "muscleGroup": "Biceps" },
+  { "name": "Triceps Pushdown", "muscleGroup": "Triceps" },
+  { "name": "Barbell Wrist Curl", "muscleGroup": "Forearms" },
+  { "name": "Hanging Leg Raise", "muscleGroup": "Abs" },
+  { "name": "Leg Press", "muscleGroup": "Quads" },
+  { "name": "Romanian Deadlift", "muscleGroup": "Hamstrings" },
+  { "name": "Hip Abduction Machine", "muscleGroup": "Abductor/Adductor" },
+  { "name": "Standing Calf Raise", "muscleGroup": "Calves" }
 ]
