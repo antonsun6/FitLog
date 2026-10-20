@@ -63,7 +63,24 @@ explicitly, not via the schema's default); sign-in/sign-out work;
 request and redirect signed-out users off protected app routes /
 signed-in users off the auth routes; `app/(app)/dashboard/page.tsx` reads
 the real signed-in user's Prisma row as the proof this all connects
-end-to-end.
+end-to-end. The homepage (`app/page.tsx`) checks auth state itself and
+redirects to `/dashboard` if signed in, otherwise shows Sign Up/Sign In
+links — it was briefly a dead-end scaffolding placeholder with no links at
+all; fixed.
+
+**Password reset exists** (`app/(auth)/reset-password/`): request page ->
+Supabase emails a link (anti-enumeration generic response, same posture as
+sign-up) -> `/reset-password/confirm` exchanges the emailed `code` for a
+session via `exchangeCodeForSession`, then lets the user set a new
+password via `auth.updateUser`. Needs `NEXT_PUBLIC_SITE_URL` added to
+Supabase's Authentication → URL Configuration → Redirect URLs allowlist
+(as `<value>/reset-password/confirm`) or the emailed link fails. Built
+after a real bug: Supabase's `signUp()` returns a success-shaped response
+(no error) for an already-registered email as an anti-enumeration measure,
+so sign-up's own error handling only ever saw the resulting Prisma
+`P2002` on `User.email` — now caught specifically and pointed at sign-in /
+this reset flow instead of the dead-end "contact support" message it used
+to show.
 
 **Exercise library UI is complete** (`docs/TECHNICAL_PLAN.md` §8 step 3):
 `app/(app)/exercises/page.tsx` lists library exercises (`ownerId: null`)
