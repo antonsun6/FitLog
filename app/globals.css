@@ -19,6 +19,23 @@
   }
 }
 
+/* BodyweightChart (components/BodyweightChart.tsx) — single-series line,
+ * so no legend is needed (dataviz skill: "a single series needs no legend
+ * box"). Slot-1 blue from the reference categorical palette. */
+.bodyweight-chart {
+  --chart-line: #2a78d6;
+  --chart-grid: #e5e5e5;
+  --chart-text: #71717a;
+}
+
+@media (prefers-color-scheme: dark) {
+  .bodyweight-chart {
+    --chart-line: #3987e5;
+    --chart-grid: #292929;
+    --chart-text: #a3a3a3;
+  }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
