@@ -16,9 +16,9 @@ export default function AppLayout({
 }) {
   return (
     <div className="flex min-h-full flex-1 flex-col">
-      <header className="flex items-center justify-between border-b px-6 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-y-2 border-b px-4 py-3 sm:px-6">
         <span className="font-semibold">FitLogger</span>
-        <nav className="flex items-center gap-4 text-sm">
+        <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
           {NAV_LINKS.map((link) => (
             <Link key={link.href} href={link.href} className="hover:underline">
               {link.label}

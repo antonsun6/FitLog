@@ -99,6 +99,38 @@ follow-up.
   and throws a genuine `P2002` — see `app/(app)/exercises/actions.test.ts` for
   the pattern. Don't skip this branch just because the pre-check "usually"
   catches it; that's exactly the kind of bug this project has shipped before.
+- **`tests/rls.test.ts` verifies the RLS policies for real, against a
+  non-owner role** — not just "the migration applied without erroring."
+  Two one-time additions to the local test DB (beyond the plain `migrate
+  deploy` above) make this possible, since vanilla local Postgres has
+  neither Supabase's `auth` schema nor a non-superuser role:
+  ```sql
+  -- 1. Stub Supabase's auth.uid(), reading the same session GUC Supabase's
+  --    real PostgREST layer sets per-request:
+  CREATE SCHEMA IF NOT EXISTS auth;
+  CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
+  LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(
+      NULLIF(current_setting('request.jwt.claim.sub', true), ''),
+      (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+    )::uuid
+  $$;
+
+  -- 2. A non-owner role mimicking Supabase's `authenticated` — the local
+  --    Postgres user that owns the tables (created them via migrate deploy)
+  --    always bypasses RLS, same as Supabase's `postgres` role in prod, so
+  --    testing through it would prove nothing:
+  CREATE ROLE app_authenticated NOLOGIN;
+  GRANT USAGE ON SCHEMA public TO app_authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_authenticated;
+  GRANT app_authenticated TO <your local Postgres login role>;
+  ```
+  `tests/helpers/rls.ts`'s `asUser(userId, ...)` opens a raw `pg` connection,
+  `SET LOCAL ROLE app_authenticated`, and sets `request.jwt.claims` to
+  simulate a specific signed-in user — the same mechanism Supabase's real
+  Data API uses. Every call rolls back its transaction, so "allowed" writes
+  under test never actually persist. This is extra defense-in-depth
+  verification, not the app's primary boundary — see the RLS note below.
 
 ## Status
 
@@ -106,13 +138,28 @@ Scaffolding complete: Next.js + Tailwind + Prisma schema (all MVP models) +
 `lib/db.ts`, `lib/units.ts` implemented, `lib/pr.ts` stubbed. Supabase
 project is connected — `.env` has real credentials, the initial migration
 (`prisma/migrations/..._init`) is applied, and the seed script has run
-successfully. RLS policies are still just designed on paper
-(`docs/TECHNICAL_PLAN.md` §3), not yet written — **and note the Prisma
-connection (`DATABASE_URL`/`DIRECT_URL`) uses Supabase's `postgres` role,
-which has `BYPASSRLS`, so RLS won't actually protect app queries even once
-policies exist. Every server action must do its own
+successfully.
+
+**RLS policies are written and applied**
+(`prisma/migrations/20261117062903_add_rls_policies/`, implementing
+`docs/TECHNICAL_PLAN.md` §3) — every table has `ENABLE ROW LEVEL SECURITY`
+plus `auth.uid()::text = "userId"`/`"ownerId"` policies (or the EXISTS-based
+join form for `RoutineExercise`/`WorkoutExercise`/`SetEntry`), library
+`Exercise` rows (`ownerId IS NULL`) stay select-open with no write policy.
+Two things worth knowing if you touch this migration again: (1) `auth.uid()`
+returns `uuid` but every id column here is `text` — every comparison needs
+an explicit `::text` cast or Postgres rejects the policy with "operator does
+not exist: uuid = text"; (2) apply with `prisma migrate deploy`, not
+`migrate dev` — `migrate dev`'s shadow-database validation step runs
+against a bare throwaway Postgres with no `auth` schema at all, so it fails
+with "schema auth does not exist" even on a correctly-written migration.
+**And still — note the Prisma connection (`DATABASE_URL`/`DIRECT_URL`) uses
+Supabase's `postgres` role, which has `BYPASSRLS`, so none of this protects
+the app's own queries. Every server action must do its own
 `where: { userId: ... }` filtering — RLS here is defense-in-depth for the
-Data API only (currently disabled), not the primary boundary.**
+Data API only (currently disabled), not the primary boundary.** Verified for
+real (not just "applied without erroring") by `tests/rls.test.ts` against a
+non-owner role — see "Testing" above.
 
 **Auth is complete** (`docs/TECHNICAL_PLAN.md` §8 step 2): sign-up creates
 both a Supabase auth user and a matching Prisma `User` row (id kept in sync
@@ -245,8 +292,76 @@ themselves are still logged fresh each session — a routine only pre-fills
 `WorkoutSession.routineId` on any past session that used it rather than
 deleting that history (schema: `onDelete: SetNull`).
 
-Every other app page (`bodyweight`, `settings`) is still a static
-placeholder.
+**Bodyweight UI is complete** (`docs/TECHNICAL_PLAN.md` §8 step 8 /
+`docs/PRD.md` workflow #6): `app/(app)/bodyweight/page.tsx` has a log form
+(weight + optional date, defaulting to today), a Recharts trend chart
+(`components/BodyweightChart.tsx`, single-series line — colors/tokens in
+`app/globals.css`'s `.bodyweight-chart` block per the dataviz skill's
+single-series-needs-no-legend rule), and an inline-editable history list.
+`app/(app)/bodyweight/actions.ts` (`logBodyweight`/`updateBodyweightEntry`/
+`deleteBodyweightEntry`) follows the same kg-canonical conversion as set
+logging (`lib/units.ts`) and the same directly-owned-table scoping as other
+`BodyweightEntry`/`Routine`/`WorkoutSession` actions (`where: { id, userId }`,
+no join needed — see the RLS note above). Entry delete has no confirm
+dialog, matching the existing single-set-delete precedent (low-stakes,
+trivially redone by re-logging). **Not verified in a real browser** — no
+browser tool was available in that session, only a curl sanity check that
+the route doesn't 500; the logic itself is covered by
+`app/(app)/bodyweight/actions.test.ts` against the real local test DB. Worth
+an actual click-through before calling this fully done.
+
+**Account deletion is complete** (`docs/TECHNICAL_PLAN.md` §8 step 9 /
+`docs/PRD.md` workflow #7): `app/(app)/settings/page.tsx` has a danger-zone
+section with `components/DeleteAccountForm.tsx` — a client component
+requiring the user to type their own email exactly before the submit button
+enables, since this is irreversible and a plain `window.confirm`
+(`ConfirmSubmitButton`'s usual pattern) felt too easy to click through for
+something at this stakes level. Re-validated server-side regardless
+(`app/(app)/settings/actions.ts`'s `deleteAccount`) since the client check
+alone is trivially bypassable. **Deletion order matters and is deliberate:
+the Supabase auth user is deleted FIRST** (via `lib/supabase/admin.ts`'s
+service-role client, `auth.admin.deleteUser`), **then** the Prisma `User`
+row (which cascades every owned table). If step 1 fails, nothing is
+touched. The reverse order's failure mode is worse — a successful Prisma
+delete followed by a failed auth delete would leave a live, loggable-into
+auth account with its profile already gone; this order's own failure mode
+(auth gone, Prisma row orphaned) is strictly safer, since nobody can obtain
+a session for that user id anymore, so the orphaned row is unreachable, not
+a live gap. Verified against the real local test DB
+(`app/(app)/settings/actions.test.ts`), including a dedicated test that
+seeds one row in every owned table and confirms all of them are gone after
+deletion — not just the `User` row.
+
+**PWA polish is complete** (`docs/TECHNICAL_PLAN.md` §8 step 10):
+`app/manifest.ts` (Next.js's native manifest route convention — generates
+`/manifest.webmanifest`, linked from `app/layout.tsx`'s `metadata.manifest`)
+plus icons in `public/` (`icon-192.png`, `icon-512.png`,
+`apple-touch-icon.png`, `favicon-32.png` — generated from a simple inline
+SVG via `qlmanage -t`/`sips`, both macOS built-ins, no new dependency).
+`public/sw.js` is a deliberately inert service worker (registered by
+`components/ServiceWorkerRegistration.tsx`) — it exists only because some
+browsers' installability criteria require an active SW with a fetch
+handler, not for offline caching: this app needs a live Supabase connection
+for almost everything, so caching dynamic/authenticated pages would risk
+serving stale data, and the PRD only asks for "installable," not
+"offline-capable." The one real mobile-UX bug found: `app/(app)/layout.tsx`'s
+header nav (5 links + sign-out, all on one row) had no wrap behavior and
+would overflow horizontally on a phone-width screen — fixed with
+`flex-wrap` on both the header and nav rows rather than building a
+hamburger menu, consistent with the rest of the app's minimal-effort
+styling. **Not verified in a real browser's actual install flow** (no
+browser tool available in that session) — `pnpm build` + direct `curl`
+checks confirm the manifest/icons/SW all serve with correct content-types,
+but an actual "Add to Home Screen" click-through is still worth doing.
+
+Every other app page is built out now — **the only known gap left in the
+whole MVP is the unit-preference toggle** (`app/(app)/settings/page.tsx`
+still has a TODO for it; sign-up has no unit-selection step either, so
+every account is stuck on KG with no way to change it in the UI, even
+though `lib/units.ts`/the schema's `unitPreference` field fully support
+LB). Not in `docs/TECHNICAL_PLAN.md` §8's numbered build order as its own
+step, so it was never picked up — worth doing next if you want the product
+fully workflow-complete per `docs/PRD.md`.
 
 **Operational note**: this Supabase project is on the free tier and
 auto-pauses after a period of inactivity — its pooler connection fails with
@@ -256,14 +371,17 @@ take a few minutes for the pooler specifically to catch up after the
 REST API already looks fine — if `pnpm dev` or a verification script can't
 connect, check the dashboard before assuming the code broke.
 
-Remaining build order (`docs/TECHNICAL_PLAN.md` §8): bodyweight UI →
-account deletion + RLS verification → PWA polish. Update this section as
-steps land so a fresh session can see what's actually done vs. still
-planned.
+**`docs/TECHNICAL_PLAN.md` §8's build order is complete** (all 10 steps).
+Remaining work is the unit-preference-toggle gap noted above, plus whatever
+manual browser verification hasn't happened yet (bodyweight UI, PWA install
+flow — both flagged above). Phase 2 (social: follow/feed/kudos) is next if
+asked for, but stays deliberately out of scope until requested — see the
+"Social is deliberately phase 2" convention above.
 
-**Test suite exists now** (see "Testing" above): `lib/units.ts`,
-`lib/muscle-groups.ts`, `lib/pr.ts`, and every `actions.ts` across both
-`app/(app)` and `app/(auth)` are at 100% coverage (195 tests as of routines
-UI landing). This was added retroactively alongside the routines feature —
-when you build bodyweight UI / account deletion next, write their tests in
-the same change rather than as a follow-up.
+**Test suite** (see "Testing" above): `lib/units.ts`, `lib/muscle-groups.ts`,
+`lib/pr.ts`, and every `actions.ts` across `app/(app)` and `app/(auth)` are
+at 100% coverage (244 tests as of account-deletion/RLS/PWA landing,
+including the dedicated non-coverage-gated `tests/rls.test.ts` suite). Keep
+writing tests for each new `lib/*.ts`/`actions.ts` file in the same
+change — this is a standing requirement now, not specific to any one
+feature.
