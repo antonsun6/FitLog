@@ -29,6 +29,9 @@ pnpm exec tsc --noEmit      # type-check only
 pnpm exec prisma generate   # regenerate the Prisma client after a schema change
 pnpm exec prisma migrate dev --name <name>   # create + apply a migration
 pnpm exec prisma db seed    # run prisma/seed.ts (library exercise catalog)
+pnpm test                   # vitest run (lib/*.ts + every actions.ts, see "Testing" below)
+pnpm test:watch             # vitest in watch mode
+pnpm test:coverage          # vitest run --coverage — must stay at 100% (lines/branches/fns/stmts)
 ```
 
 ## Conventions worth remembering
@@ -41,6 +44,61 @@ pnpm exec prisma db seed    # run prisma/seed.ts (library exercise catalog)
 - **Account deletion needs two systems, not one.** Every Prisma-modeled table cascades from `User` via `ON DELETE CASCADE`, but the Supabase `auth.users` row is separate and needs the Supabase Admin API (`SUPABASE_SERVICE_ROLE_KEY`, server-only) to remove — a Prisma-only delete leaves an orphaned auth account.
 - **Social (follow/feed/kudos) is deliberately phase 2**, deferred to keep v1 scope tight. Don't add social tables or UI without checking `docs/PRD.md` first — the schema is designed to add it later without reworking core tables.
 - **A schema change needs an actual dev-server restart, not just a hot reload.** `pnpm exec prisma migrate dev` regenerates the Prisma Client on disk, but a long-running `next dev` process won't pick up the new client without restarting. Worse: `pkill -f "next dev"` only reliably kills the launcher process, not the `next-server` worker it spawns — check `lsof -i :3000` / `ps aux | grep next-server` and kill that PID directly if a restart doesn't seem to take effect (symptom: `PrismaClientValidationError: Unknown argument` for a field that's definitely in the schema).
+
+## Testing
+
+Every `lib/*.ts` file and every `actions.ts` (server actions) must stay at
+**100% coverage** (lines/branches/functions/statements — enforced by the
+`coverage.thresholds` block in `vitest.config.mts`; `pnpm test:coverage`
+fails the build if any of the four drops below 100). `page.tsx`/`layout.tsx`
+(React Server Components) are deliberately *not* in that gate — they're thin
+data-fetching + JSX, better suited to manual/e2e checks than unit tests; see
+`vitest.config.mts`'s `coverage.include`. When you add a new `lib/*.ts` file
+or `actions.ts` export, add tests for it in the same change, not as a
+follow-up.
+
+- **Tests hit a real local Postgres database, never the dev Supabase
+  project.** Mocking Prisma would only test that the mock does what you told
+  it to — it's exactly the kind of test that would've missed the real bugs
+  this project already hit (the case-insensitive unique-index race, the PR
+  float-rounding bug). One-time setup:
+  ```bash
+  brew install postgresql@14 && brew services start postgresql@14
+  createdb -h 127.0.0.1 -p <your port, check `brew services info postgresql@14`> fitlogger_test
+  cp .env.test.example .env.test   # then edit DATABASE_URL/DIRECT_URL for your local host/port/user
+  DATABASE_URL=... DIRECT_URL=... pnpm exec prisma migrate deploy   # apply the real migration history
+  ```
+  `vitest.config.mts` loads `.env.test` (git-ignored, like `.env`) at config
+  eval time, before any test file imports `lib/db.ts`. Re-run `prisma migrate
+  deploy` against the test DB after adding a new migration, same as you
+  would for the real one.
+- **Test files run sequentially, not in parallel (`fileParallelism: false`
+  in `vitest.config.mts`).** Every DB-touching test calls `resetDb()`
+  (`tests/helpers/db.ts`, a `TRUNCATE ... CASCADE` on every app table) in
+  `afterEach` for isolation. If files ran in parallel, one file's reset would
+  race another file's in-progress fixtures against the same real database —
+  this isn't a mocked-per-test connection, it's one shared Postgres instance.
+- **Server actions are tested as real functions, not through HTTP.** Two
+  things get mocked (`tests/helpers/`), everything else is real:
+  - `next/navigation`'s `redirect()` — real Next.js has it throw a special
+    error the framework catches; `tests/helpers/redirect.ts`'s
+    `redirectMock`/`RedirectSignal` mirror that so `captureRedirect(() =>
+    someAction(formData))` returns the target URL instead of letting the
+    throw escape.
+  - `@/lib/supabase/server`'s `createClient()` — real Supabase auth isn't
+    reachable/desirable in tests; `tests/helpers/supabase.ts`'s
+    `createFakeSupabase()`/`fakeAuthedUser()` stub just the `auth.*` methods
+    each action actually calls.
+  - Everything else (Prisma queries, `lib/pr.ts`, `lib/muscle-groups.ts`) runs
+    for real against the local test DB.
+- **A pre-check + unique-constraint race (the exercise/muscle-group
+  duplicate-name pattern) is tested by forcing the race, not skipping it.**
+  `vi.spyOn(prisma.exercise, "findFirst").mockResolvedValueOnce(null)` makes
+  the app-level pre-check report "nothing found" while a real conflicting row
+  already exists, so the subsequent `create()` hits the real DB unique index
+  and throws a genuine `P2002` — see `app/(app)/exercises/actions.test.ts` for
+  the pattern. Don't skip this branch just because the pre-check "usually"
+  catches it; that's exactly the kind of bug this project has shipped before.
 
 ## Status
 
@@ -173,8 +231,22 @@ new `components/ConfirmSubmitButton.tsx` (client component, `window.confirm`
 before submit); single-set delete doesn't bother — low-stakes, trivially
 redone by re-logging.
 
-Every other app page (`routines/*`, `bodyweight`, `settings`) is still a
-static placeholder.
+**Routines UI is complete** (`docs/TECHNICAL_PLAN.md` §8 step 7 /
+`docs/PRD.md` workflow #4): `app/(app)/routines/page.tsx` lists the user's
+routines with exercise counts + a create form; `app/(app)/routines/[id]/
+page.tsx` is the editor (rename, delete, add/edit/remove exercises with
+optional target sets/reps, reusing the same library-or-create-custom lookup
+as the workout session page) plus a "recent workouts from this routine"
+list. `workout/new` now shows a routine picker when the user has any;
+`startWorkoutSession` (`app/(app)/workout/actions.ts`) copies the routine's
+`RoutineExercise` rows into the new session as `WorkoutExercise` rows (sets
+themselves are still logged fresh each session — a routine only pre-fills
+*which* exercises, not weights/reps). Deleting a routine `SetNull`s
+`WorkoutSession.routineId` on any past session that used it rather than
+deleting that history (schema: `onDelete: SetNull`).
+
+Every other app page (`bodyweight`, `settings`) is still a static
+placeholder.
 
 **Operational note**: this Supabase project is on the free tier and
 auto-pauses after a period of inactivity — its pooler connection fails with
@@ -184,7 +256,14 @@ take a few minutes for the pooler specifically to catch up after the
 REST API already looks fine — if `pnpm dev` or a verification script can't
 connect, check the dashboard before assuming the code broke.
 
-Remaining build order (`docs/TECHNICAL_PLAN.md` §8): routines UI →
-bodyweight UI → account deletion + RLS verification → PWA polish. Update
-this section as steps land so a fresh session can see what's actually done
-vs. still planned.
+Remaining build order (`docs/TECHNICAL_PLAN.md` §8): bodyweight UI →
+account deletion + RLS verification → PWA polish. Update this section as
+steps land so a fresh session can see what's actually done vs. still
+planned.
+
+**Test suite exists now** (see "Testing" above): `lib/units.ts`,
+`lib/muscle-groups.ts`, `lib/pr.ts`, and every `actions.ts` across both
+`app/(app)` and `app/(auth)` are at 100% coverage (195 tests as of routines
+UI landing). This was added retroactively alongside the routines feature —
+when you build bodyweight UI / account deletion next, write their tests in
+the same change rather than as a follow-up.

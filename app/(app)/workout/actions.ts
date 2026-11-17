@@ -18,11 +18,40 @@ export async function startWorkoutSession(formData: FormData) {
   const nameRaw = formData.get("name");
   const name =
     typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : undefined;
+  const routineIdRaw = formData.get("routineId");
+  const routineId =
+    typeof routineIdRaw === "string" && routineIdRaw ? routineIdRaw : undefined;
+
+  // Re-verify ownership of the routine server-side rather than trusting a
+  // client-submitted id — same reasoning as every other ownership check in
+  // this codebase (Prisma's role bypasses RLS).
+  const routine = routineId
+    ? await prisma.routine.findFirst({
+        where: { id: routineId, userId: user.id },
+        include: { exercises: { orderBy: { order: "asc" } } },
+      })
+    : null;
 
   const session = await prisma.workoutSession.create({
     // Omitting `name` lets the schema default ("Lifting Session") apply.
-    data: { userId: user.id, ...(name ? { name } : {}) },
+    data: {
+      userId: user.id,
+      ...(name ? { name } : {}),
+      ...(routine ? { routineId: routine.id } : {}),
+    },
   });
+
+  // Pre-fill the session's exercises from the routine (docs/PRD.md "Key User
+  // Workflows" #2) — sets themselves are still logged fresh each session.
+  if (routine && routine.exercises.length > 0) {
+    await prisma.workoutExercise.createMany({
+      data: routine.exercises.map((re) => ({
+        sessionId: session.id,
+        exerciseId: re.exerciseId,
+        order: re.order,
+      })),
+    });
+  }
 
   redirect(`/workout/${session.id}`);
 }

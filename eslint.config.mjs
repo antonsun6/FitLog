@@ -24,6 +24,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated Prisma client — not hand-written, don't lint it.
     "generated/**",
+    // vitest --coverage output — regenerated on every test run.
+    "coverage/**",
   ]),
 ]);
 
